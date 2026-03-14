@@ -9,6 +9,7 @@ import {
   type MatrixEvent,
 } from "matrix-js-sdk";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
 import { MatrixCryptoBootstrapper } from "./sdk/crypto-bootstrap.js";
@@ -169,6 +170,7 @@ export class MatrixClient {
   private cryptoInitialized = false;
   private readonly decryptBridge: MatrixDecryptBridge<MatrixRawEvent>;
   private readonly verificationManager = new MatrixVerificationManager();
+  private readonly sendQueue = new KeyedAsyncQueue();
   private readonly recoveryKeyStore: MatrixRecoveryKeyStore;
   private readonly cryptoBootstrapper: MatrixCryptoBootstrapper<MatrixRawEvent>;
   private readonly autoBootstrapCrypto: boolean;
@@ -526,8 +528,10 @@ export class MatrixClient {
   }
 
   async sendMessage(roomId: string, content: MessageEventContent): Promise<string> {
-    const sent = await this.client.sendMessage(roomId, content as never);
-    return sent.event_id;
+    return await this.runSerializedRoomSend(roomId, async () => {
+      const sent = await this.client.sendMessage(roomId, content as never);
+      return sent.event_id;
+    });
   }
 
   async sendEvent(
@@ -535,8 +539,16 @@ export class MatrixClient {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<string> {
-    const sent = await this.client.sendEvent(roomId, eventType as never, content as never);
-    return sent.event_id;
+    return await this.runSerializedRoomSend(roomId, async () => {
+      const sent = await this.client.sendEvent(roomId, eventType as never, content as never);
+      return sent.event_id;
+    });
+  }
+
+  // Keep outbound room events ordered when multiple plugin paths emit
+  // messages/reactions/polls into the same Matrix room concurrently.
+  private async runSerializedRoomSend<T>(roomId: string, task: () => Promise<T>): Promise<T> {
+    return await this.sendQueue.enqueue(roomId, task);
   }
 
   async sendStateEvent(

@@ -255,6 +255,75 @@ describe("MatrixClient request hardening", () => {
     });
   });
 
+  it("serializes outbound sends per room across message and event sends", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    let releaseFirst: (() => void) | undefined;
+    const started: string[] = [];
+    matrixJsClient.sendMessage = vi.fn(async () => {
+      started.push("message");
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      return { event_id: "$message" };
+    });
+    matrixJsClient.sendEvent = vi.fn(async () => {
+      started.push("event");
+      return { event_id: "$event" };
+    });
+
+    const first = client.sendMessage("!room:example.org", {
+      msgtype: "m.text",
+      body: "hello",
+    });
+    const second = client.sendEvent("!room:example.org", "m.reaction", {
+      "m.relates_to": { event_id: "$target", key: "👍", rel_type: "m.annotation" },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["message"]);
+    expect(matrixJsClient.sendEvent).not.toHaveBeenCalled();
+
+    releaseFirst?.();
+
+    await expect(first).resolves.toBe("$message");
+    await expect(second).resolves.toBe("$event");
+    expect(started).toEqual(["message", "event"]);
+  });
+
+  it("does not serialize sends across different rooms", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    let releaseFirst: (() => void) | undefined;
+    const started: string[] = [];
+    matrixJsClient.sendMessage = vi.fn(async (roomId: string) => {
+      started.push(roomId);
+      if (roomId === "!room-a:example.org") {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return { event_id: `$${roomId}` };
+    });
+
+    const first = client.sendMessage("!room-a:example.org", {
+      msgtype: "m.text",
+      body: "a",
+    });
+    const second = client.sendMessage("!room-b:example.org", {
+      msgtype: "m.text",
+      body: "b",
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["!room-a:example.org", "!room-b:example.org"]);
+
+    releaseFirst?.();
+
+    await expect(first).resolves.toBe("$!room-a:example.org");
+    await expect(second).resolves.toBe("$!room-b:example.org");
+  });
+
   it("maps relations pages back to raw events", async () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
     matrixJsClient.relations = vi.fn(async () => ({
