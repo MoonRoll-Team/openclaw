@@ -124,7 +124,7 @@ export async function browserStart(baseUrl?: string, opts?: { profile?: string }
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs: 75000,
   });
 }
 

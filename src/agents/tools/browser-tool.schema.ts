@@ -32,6 +32,7 @@ const BROWSER_TOOL_ACTIONS = [
   "upload",
   "dialog",
   "act",
+  "credentials",
 ] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
@@ -114,6 +115,10 @@ export const BrowserToolSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Number()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
+  // credentials
+  username: Type.Optional(Type.String()),
+  password: Type.Optional(Type.String()),
+  clear: Type.Optional(Type.Boolean()),
   // Legacy flattened act params (preferred: request={...})
   kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
   doubleClick: Type.Optional(Type.Boolean()),

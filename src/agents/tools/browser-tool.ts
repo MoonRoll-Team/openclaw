@@ -7,6 +7,7 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "../../browser/client-actions.js";
+import { browserSetHeaders } from "../../browser/client-actions-state.js";
 import {
   browserCloseTab,
   browserFocusTab,
@@ -290,7 +291,7 @@ export function createBrowserTool(opts?: {
     label: "Browser",
     name: "browser",
     description: [
-      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
+      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions/credentials).",
       'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
       'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
@@ -650,6 +651,33 @@ export function createBrowserTool(opts?: {
             profile,
             proxyRequest,
           });
+        }
+        case "credentials": {
+          // setHTTPCredentials does not work over CDP connections (connectOverCDP).
+          // Use setExtraHTTPHeaders with a manually-encoded Basic auth header instead.
+          const username = readStringParam(params, "username");
+          const password = readStringParam(params, "password");
+          const clear = Boolean(params.clear);
+          const headers: Record<string, string> = clear
+            ? {}
+            : {
+                Authorization: `Basic ${Buffer.from(`${username ?? ""}:${password ?? ""}`).toString("base64")}`,
+              };
+          if (proxyRequest) {
+            const result = await proxyRequest({
+              method: "POST",
+              path: "/set/headers",
+              profile,
+              body: { headers },
+            });
+            return jsonResult(result);
+          }
+          return jsonResult(
+            await browserSetHeaders(baseUrl, {
+              headers,
+              profile,
+            }),
+          );
         }
         default:
           throw new Error(`Unknown action: ${action}`);
