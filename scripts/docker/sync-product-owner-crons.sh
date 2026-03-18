@@ -216,6 +216,7 @@ STEP 4: Filter messages. ONLY report messages with an Id NEWER than the last pro
 - Messages from FlokiLaPookie (you) or any bot (Ticket Tool, MEE6, etc.)
 - Casual chat, memes, greetings, empty messages
 - ANY message you have seen before (older than or equal to the last processed ID)
+- Messages that do not produce a final Community Signal block
 
 STEP 5: Save the newest message ID you processed:
 echo "<newest_message_id>" > /home/node/.openclaw/workspace/last-message-id.txt
@@ -230,7 +231,14 @@ Category: [Bug / Complaint / Feature Request / Support Ticket]
 
 Context: [brief explanation]
 
-If no NEW noteworthy messages, output exactly: No new community signals.
+FINAL OUTPUT RULES:
+- Output ONLY Community Signal blocks for qualifying new messages
+- If there are no qualifying new messages, output exactly: No new community signals.
+- Do NOT explain your reasoning
+- Do NOT mention last processed message IDs
+- Do NOT mention skipped or ignored messages
+- Do NOT describe filtering decisions
+- Do NOT output any text before or after the allowed final format
 EOF
 )"
 
