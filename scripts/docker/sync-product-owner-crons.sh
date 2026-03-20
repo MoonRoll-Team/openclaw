@@ -11,7 +11,7 @@ fi
 
 COMMUNITY_MONITOR_NAME="community-monitor"
 TRELLO_DONE_DOCS_NAME="trello-done-docs"
-COMMUNITY_MONITOR_EVERY="${COMMUNITY_MONITOR_EVERY:-15m}"
+COMMUNITY_MONITOR_EVERY="${COMMUNITY_MONITOR_EVERY:-5m}"
 TRELLO_DONE_DOCS_EVERY="${TRELLO_DONE_DOCS_EVERY:-30m}"
 DRY_RUN=0
 
@@ -22,7 +22,7 @@ Usage: sync-product-owner-crons.sh [options]
 Upsert the Product Owner bot cron jobs through the Dockerized OpenClaw CLI.
 
 Options:
-  --community-monitor-every <duration>  Interval for the community monitor job (default: 15m)
+  --community-monitor-every <duration>  Interval for the community monitor job (default: 5m)
   --trello-done-docs-every <duration>   Interval for the Trello docs job (default: 30m)
   --dry-run                             Print planned changes without applying them
   --help                                Show this help
@@ -200,8 +200,15 @@ fi
 COMMUNITY_MONITOR_MESSAGE="$(cat <<'EOF'
 You are a community monitor. Do these steps:
 
-STEP 1: Read the last processed message ID to avoid duplicates:
+STEP 0: Read the next available Signal ID:
+node /home/node/.openclaw/workspace/scripts/next-signal-id.mjs
+
+STEP 1: Read the last processed message ID to avoid rescanning old messages:
 cat /home/node/.openclaw/workspace/last-message-id.txt 2>/dev/null || echo "none"
+
+STEP 1B: Read the existing issue register and complaint ledger:
+cat /home/node/.openclaw/workspace/signals.log 2>/dev/null || echo "none"
+cat /home/node/.openclaw/workspace/complaint-signals.log 2>/dev/null || echo "none"
 
 STEP 2: Read recent messages from #général (public Discord):
 openclaw message read --channel discord --target $DISCORD_PUBLIC_CHANNEL_ID --limit 20
@@ -212,28 +219,66 @@ curl -s -H "Authorization: Bot $(openclaw config get channels.discord.token 2>/d
 For each ticket channel found:
 openclaw message read --channel discord --target <channel_id> --limit 10
 
-STEP 4: Filter messages. ONLY report messages with an Id NEWER than the last processed ID from step 1. IGNORE:
+STEP 4: Filter messages. ONLY consider messages with an ID NEWER than the last processed ID from step 1. IGNORE:
 - Messages from FlokiLaPookie (you) or any bot (Ticket Tool, MEE6, etc.)
 - Casual chat, memes, greetings, empty messages
-- ANY message you have seen before (older than or equal to the last processed ID)
+- ANY message older than or equal to the last processed ID
+- Permission noise such as Missing Access, Unauthorized, hidden channels, or raw control-sequence artifacts
 - Messages that do not produce a final Community Signal block
 
-STEP 5: Save the newest message ID you processed:
+STEP 4A: Cluster complaints before reporting:
+- Treat repeated reports of the same root issue as ONE ongoing incident, not separate signals
+- The same root issue means the same symptom, same user journey, and same environment/domain even if the wording changes
+- Same-user repeats within 24 hours increase confidence but do NOT justify a new Community Signal by themselves
+- Use the existing issue register and complaint ledger to avoid re-reporting an already logged issue cluster
+- Only create a new Community Signal when at least one of these is true:
+  - a different user is affected
+  - a higher-priority channel is affected
+  - the environment changed
+  - the symptom or error details materially changed
+  - at least 24 hours passed since the last reported signal for that issue and it is still active
+- If several new messages in the same run describe the same issue cluster, keep only ONE signal for that cluster using the clearest/latest user quote and any public identifier
+- Do NOT mint multiple Signal IDs for the same issue cluster in one run
+
+STEP 4AA: Special clustering guidance for known repeated complaints:
+- Daily free spin / free spin box / cannot claim free spin by the SAME user within 24 hours is usually ONE issue cluster unless the environment or symptom changed materially
+- Wager race credit repeats by the SAME user within 24 hours are ONE issue cluster
+- Daily bonus credit repeats by the SAME user within 24 hours are ONE issue cluster
+- Rakeback claim repeats by the SAME user within 24 hours are ONE issue cluster
+- Reset password CORS repeats by the SAME user within 24 hours are ONE issue cluster unless the environment/domain changed
+
+STEP 4B: Try to recover a public user identifier for each qualifying complaint:
+- Look at the same message and same visible thread/channel context
+- If the user publicly shared a player ID, account ID, UID, wallet, or email relevant to the issue, capture it
+- ONLY include identifiers that were explicitly public in Discord; never invent, infer, or guess missing identifiers
+- If none was publicly shared, leave it blank
+
+STEP 5: Save the newest message ID you scanned, even if no new signal was emitted:
 echo "<newest_message_id>" > /home/node/.openclaw/workspace/last-message-id.txt
 
-STEP 6: For each NEW noteworthy message from a real user, output:
+STEP 6: For each NEW issue cluster that survives filtering:
+- Assign the next available stable Signal ID from STEP 0 and increment the numeric suffix by 1 for each additional signal in the same UTC day during the same run
+- Append one JSON line to /home/node/.openclaw/workspace/complaint-signals.log with these fields:
+  signal_id, message_id, ts, username, channel, category, quote, context, public_identifier, ticket_status
+- Use ticket_status=\"open\" for newly logged signals
+
+STEP 7: For each NEW issue cluster that survives filtering, output:
 
 Community Signal
+Signal ID: [stable id like CS-20260318-001]
 From: [username] in #[channel]
 Category: [Bug / Complaint / Feature Request / Support Ticket]
+Public Identifier: [public player ID / account ID / email / wallet if explicitly shared, otherwise "Not provided"]
 
+Issue:
 > [verbatim quote]
 
-Context: [brief explanation]
+Impact: [brief explanation]
+Action: Say "create ticket for ID [stable id]" if you want a Trello card.
 
 FINAL OUTPUT RULES:
 - Output ONLY Community Signal blocks for qualifying new messages
-- If there are no qualifying new messages, output exactly: No new community signals.
+- If there are no qualifying new messages, output exactly: HEARTBEAT_OK
 - Do NOT explain your reasoning
 - Do NOT mention last processed message IDs
 - Do NOT mention skipped or ignored messages
@@ -248,7 +293,7 @@ Check for Trello cards recently moved to Done and update documentation.
 STEP 1: List cards in Done:
 curl -s "https://api.trello.com/1/lists/$TRELLO_LIST_DONE/cards?key=$TRELLO_API_KEY&token=$TRELLO_TOKEN&fields=id,name,desc,dateLastActivity"
 
-STEP 2: Check which cards moved in the last 2 hours (based on dateLastActivity). If none, output "No recently completed cards." and stop.
+STEP 2: Check which cards moved in the last 2 hours (based on dateLastActivity). If none, output exactly "HEARTBEAT_OK" and stop.
 
 STEP 3: Check already-processed cards:
 cat /home/node/.openclaw/workspace/docs-updated.log 2>/dev/null || echo "none"
